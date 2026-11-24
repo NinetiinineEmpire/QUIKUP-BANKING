@@ -1,0 +1,6 @@
+{
+  "name": "Countree Bank",
+  "description": "Multi-currency personal and global banking platform with real-time fraud detection, biometric passkey authentication, end-to-end encrypted privacy, budgeting analytics, and push notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
