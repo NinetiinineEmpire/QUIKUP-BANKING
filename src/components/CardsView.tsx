@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CreditCard, Eye, EyeOff, Globe, Lock, Snowflake, Unlock, Wifi } from 'lucide-react';
 import { formatMoney } from '../lib/currency.ts';
 import type { BankAccount, BankCard } from '../types/banking.ts';
+import bankCardVisualImg from '../assets/images/quikup_bank_card_1795541676674.jpg';
 
 interface CardsViewProps {
   cards: BankCard[];
@@ -54,8 +55,8 @@ export function CardsView({ cards, accounts, onUpdateCard }: CardsViewProps) {
               <div className="relative aspect-[1.62/1] w-full overflow-hidden rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 via-teal-950 to-slate-950 p-6 text-white shadow-sm">
                 {!imgErrorIds[card.id] && (
                   <img
-                    src="/src/assets/images/countree_card_metal_1795466382355.jpg"
-                    alt={`${card.label} metallic finish`}
+                    src={bankCardVisualImg}
+                    alt={`${card.label} navy contactless card finish`}
                     referrerPolicy="no-referrer"
                     onError={() => setImgErrorIds((prev) => ({ ...prev, [card.id]: true }))}
                     className="absolute inset-0 h-full w-full object-cover opacity-80"

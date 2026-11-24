@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onIdTokenChanged, signOut } from 'firebase/auth';
 import {
+  Activity,
   ArrowLeftRight,
   BarChart3,
   Bell,
@@ -18,6 +19,7 @@ import {
   X,
 } from 'lucide-react';
 import { AccountsView } from './components/AccountsView.tsx';
+import { AdminDashboardView } from './components/AdminDashboardView.tsx';
 import { AnalyticsView } from './components/AnalyticsView.tsx';
 import { AuthPortal, QuikupLogo } from './components/AuthPortal.tsx';
 import { BiometricModal } from './components/BiometricModal.tsx';
@@ -51,6 +53,7 @@ import type {
   NotificationItem,
   SecuritySettings,
 } from './types/banking.ts';
+import accountHolderAvatarImg from './assets/images/avatar_account_holder_1795466382163.jpg';
 
 type NavTab =
   | 'overview'
@@ -76,8 +79,10 @@ const TAB_LABELS: Record<NavTab, string> = {
 export default function App() {
   const [darkMode, setDarkMode] = useState<boolean>(false);
 
-  // Session token strictly in React memory
+  // Session tokens strictly in React memory
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [adminSessionToken, setAdminSessionToken] = useState<string | null>(null);
+  const [viewingAdminConsole, setViewingAdminConsole] = useState(false);
   const [bankingData, setBankingData] = useState<BankingBootstrapPayload | null>(null);
   const [loadingBootstrap, setLoadingBootstrap] = useState(false);
 
@@ -120,24 +125,53 @@ export default function App() {
     }, 4500);
   }, []);
 
-  const loadBootstrap = useCallback(async (token?: string) => {
-    setLoadingBootstrap(true);
-    try {
-      const activeToken =
-        token ||
-        (authProviderRef.current === 'firebase' ? await auth.currentUser?.getIdToken() : null) ||
-        sessionToken;
-      if (!activeToken) return;
-      setSessionToken(activeToken);
-      const data = await apiRequest<BankingBootstrapPayload>('/api/banking/bootstrap', {
-        token: activeToken,
-      });
-      setBankingData(data);
-      setDisplayCurrency(data.user.preferredCurrency);
-    } finally {
-      setLoadingBootstrap(false);
-    }
-  }, [sessionToken]);
+  const loadBootstrap = useCallback(
+    async (
+      token?: string,
+      options?: { silent?: boolean }
+    ): Promise<BankingBootstrapPayload | undefined> => {
+      if (!options?.silent) {
+        setLoadingBootstrap(true);
+      }
+      try {
+        const activeToken =
+          token ||
+          (authProviderRef.current === 'firebase' ? await auth.currentUser?.getIdToken() : null) ||
+          sessionToken;
+        if (!activeToken) return undefined;
+        setSessionToken(activeToken);
+        const data = await apiRequest<BankingBootstrapPayload>('/api/banking/bootstrap', {
+          token: activeToken,
+        });
+        setBankingData(data);
+        if (!options?.silent) {
+          setDisplayCurrency(data.user.preferredCurrency);
+        }
+        return data;
+      } finally {
+        if (!options?.silent) {
+          setLoadingBootstrap(false);
+        }
+      }
+    },
+    [sessionToken]
+  );
+
+  // Silent background refresh so admin balance adjustments or freezes appear live in the user dashboard
+  useEffect(() => {
+    if (!sessionToken || !bankingData || viewingAdminConsole) return;
+    const syncSilently = () => {
+      if (document.visibilityState === 'visible') {
+        loadBootstrap(sessionToken, { silent: true }).catch(() => {});
+      }
+    };
+    const intervalId = window.setInterval(syncSilently, 5000);
+    window.addEventListener('focus', syncSilently);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', syncSilently);
+    };
+  }, [sessionToken, bankingData, viewingAdminConsole, loadBootstrap]);
 
   useEffect(() => {
     const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
@@ -149,7 +183,10 @@ export default function App() {
             setSessionToken(token);
             if (loadedUidRef.current !== firebaseUser.uid) {
               loadedUidRef.current = firebaseUser.uid;
-              await loadBootstrap(token);
+              const data = await loadBootstrap(token);
+              if (data?.user.role === 'admin') {
+                setViewingAdminConsole(true);
+              }
             }
           } catch (err) {
             loadedUidRef.current = null;
@@ -163,6 +200,7 @@ export default function App() {
         authProviderRef.current = null;
         loadedUidRef.current = null;
         setSessionToken(null);
+        setViewingAdminConsole(false);
         setBankingData(null);
         setE2eeKey(null);
         setE2eeFingerprint('');
@@ -220,13 +258,18 @@ export default function App() {
         body: { preferredCurrency },
       }).catch(() => {});
     }
-    await loadBootstrap(token);
+    const data = await loadBootstrap(token);
+    if (data?.user.role === 'admin') {
+      setViewingAdminConsole(true);
+    }
   };
 
   const handleSignOut = async () => {
     authProviderRef.current = null;
     loadedUidRef.current = null;
     await signOut(auth).catch(() => {});
+    setAdminSessionToken(null);
+    setViewingAdminConsole(false);
     setSessionToken(null);
     setBankingData(null);
     setE2eeKey(null);
@@ -284,6 +327,35 @@ export default function App() {
     [bankingData]
   );
 
+  if (adminSessionToken) {
+    return (
+      <AdminDashboardView
+        adminToken={adminSessionToken}
+        darkMode={darkMode}
+        onToggleDark={() => setDarkMode((d) => !d)}
+        onSignOut={() => {
+          setAdminSessionToken(null);
+          setViewingAdminConsole(false);
+        }}
+        canSwitchToPersonal={Boolean(sessionToken && bankingData)}
+        onSwitchToPersonal={() => setViewingAdminConsole(false)}
+      />
+    );
+  }
+
+  if (viewingAdminConsole && sessionToken && bankingData?.user.role === 'admin') {
+    return (
+      <AdminDashboardView
+        adminToken={sessionToken}
+        darkMode={darkMode}
+        onToggleDark={() => setDarkMode((d) => !d)}
+        onSignOut={handleSignOut}
+        canSwitchToPersonal
+        onSwitchToPersonal={() => setViewingAdminConsole(false)}
+      />
+    );
+  }
+
   if (!sessionToken || !bankingData) {
     if (authInitializing || (sessionToken && loadingBootstrap)) {
       return (
@@ -297,6 +369,10 @@ export default function App() {
         darkMode={darkMode}
         onToggleDark={() => setDarkMode((d) => !d)}
         onAuthenticated={handleAuthenticated}
+        onAdminAuthenticated={(token) => {
+          setAdminSessionToken(token);
+          setViewingAdminConsole(true);
+        }}
       />
     );
   }
@@ -368,7 +444,17 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="border-t border-white/10 pt-4">
+          <div className="space-y-1 border-t border-white/10 pt-4">
+            {user.role === 'admin' && (
+              <button
+                type="button"
+                onClick={() => setViewingAdminConsole(true)}
+                className="flex w-full items-center gap-3 rounded-lg px-3.5 py-2.5 text-sm font-medium text-blue-300 hover:bg-white/10 hover:text-white whitespace-nowrap"
+              >
+                <Activity className="h-4 w-4 shrink-0" />
+                <span>Admin Operations</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handleSignOut}
@@ -433,7 +519,7 @@ export default function App() {
               >
                 {!avatarError ? (
                   <img
-                    src="/src/assets/images/avatar_account_holder_1795466382163.jpg"
+                    src={accountHolderAvatarImg}
                     alt={user.fullName}
                     referrerPolicy="no-referrer"
                     onError={() => setAvatarError(true)}
@@ -967,6 +1053,19 @@ export default function App() {
                   </button>
                 );
               })}
+              {user.role === 'admin' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewingAdminConsole(true);
+                    setMoreDrawerOpen(false);
+                  }}
+                  className="flex items-center gap-2.5 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-3 text-left text-xs font-semibold text-[#0B2545] dark:border-blue-900/50 dark:bg-blue-950/40 dark:text-blue-300"
+                >
+                  <Activity className="h-4 w-4" />
+                  <span>Admin Operations</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleSignOut}

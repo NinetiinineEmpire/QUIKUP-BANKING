@@ -4,6 +4,10 @@ import dotenv from 'dotenv';
 import express, { type Response } from 'express';
 import { createServer as createViteServer } from 'vite';
 import {
+  adminAdjustAccountBalance,
+  adminResolveFraudAlert,
+  adminSetAccountFrozen,
+  claimAdminPassword,
   createBankAccount,
   createPaymentReminder,
   createSavingsGoal,
@@ -13,6 +17,9 @@ import {
   executeTransfer,
   findUserByEmail,
   generateId,
+  getAdminClaimStatus,
+  getAdminCredentialRecord,
+  getAdminOverview,
   getBankingBootstrap,
   getOrCreateUserAndPortfolio,
   getUserRecord,
@@ -40,7 +47,7 @@ import {
   verifyPassword,
   verifySignedToken,
 } from './src/lib/session-token.ts';
-import { requireAuth, type AuthRequest } from './src/middleware/auth.ts';
+import { requireAdminAuth, requireAuth, type AuthRequest } from './src/middleware/auth.ts';
 import type {
   AccountType,
   BiometricCredentialRecord,
@@ -152,7 +159,8 @@ async function resolveAuthedUser(req: AuthRequest) {
   return getOrCreateUserAndPortfolio(
     uid,
     req.user!.email || '',
-    typeof req.user!.name === 'string' ? req.user!.name : undefined
+    typeof req.user!.name === 'string' ? req.user!.name : undefined,
+    Boolean(req.user!.emailVerified)
   );
 }
 
@@ -317,7 +325,8 @@ async function startServer() {
       const payload = await getBankingBootstrap(
         req.user!.uid,
         req.user!.email || '',
-        typeof req.user!.name === 'string' ? req.user!.name : undefined
+        typeof req.user!.name === 'string' ? req.user!.name : undefined,
+        Boolean(req.user!.emailVerified)
       );
       res.json(payload);
     } catch {
@@ -832,6 +841,205 @@ async function startServer() {
       res.json({ user: updatedProfile });
     } catch {
       res.status(500).json({ error: 'Unable to rotate encryption keys.' });
+    }
+  });
+
+  app.get('/api/admin/auth/status', async (_req, res) => {
+    try {
+      const status = await getAdminClaimStatus();
+      res.json(status);
+    } catch {
+      res.status(500).json({ error: 'Unable to check admin status.' });
+    }
+  });
+
+  app.post('/api/admin/auth/claim', async (req, res) => {
+    try {
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      if (password.length < 8 || password.length > 128) {
+        res.status(400).json({ error: 'Admin password must be between 8 and 128 characters.' });
+        return;
+      }
+
+      const { salt, hash } = hashPassword(password);
+      const result = await claimAdminPassword(salt, hash);
+      if (result.errorStatus) {
+        res.status(result.errorStatus).json({ error: result.errorMessage });
+        return;
+      }
+
+      const token = signToken(
+        {
+          uid: 'admin_console',
+          email: 'Admin Operations',
+          purpose: 'admin_session',
+        },
+        60 * 60 * 12
+      );
+      res.status(201).json({ token });
+    } catch {
+      res.status(500).json({ error: 'Unable to set up admin console password.' });
+    }
+  });
+
+  app.post('/api/admin/auth/login', async (req, res) => {
+    try {
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      if (!password || password.length > 128) {
+        res.status(400).json({ error: 'Please enter the admin password.' });
+        return;
+      }
+
+      const envPasscode = process.env.ADMIN_PASSCODE?.trim();
+      let valid = false;
+
+      if (envPasscode && envPasscode.length > 0) {
+        const expectedDigest = crypto.createHash('sha256').update(envPasscode).digest();
+        const providedDigest = crypto.createHash('sha256').update(password).digest();
+        valid = crypto.timingSafeEqual(expectedDigest, providedDigest);
+      } else {
+        const record = await getAdminCredentialRecord();
+        if (!record) {
+          res.status(403).json({ error: 'Admin password has not been claimed yet.' });
+          return;
+        }
+        valid = verifyPassword(password, record.passwordSalt, record.passwordHash);
+      }
+
+      if (!valid) {
+        res.status(401).json({ error: 'Invalid admin password.' });
+        return;
+      }
+
+      const token = signToken(
+        {
+          uid: 'admin_console',
+          email: 'Admin Operations',
+          purpose: 'admin_session',
+        },
+        60 * 60 * 12
+      );
+      res.json({ token });
+    } catch {
+      res.status(500).json({ error: 'Unable to sign in to admin console.' });
+    }
+  });
+
+  app.get('/api/admin/overview', requireAdminAuth, async (_req, res) => {
+    try {
+      const overview = await getAdminOverview();
+      res.json(overview);
+    } catch {
+      res.status(500).json({ error: 'Unable to load bank monitoring data.' });
+    }
+  });
+
+  app.post('/api/admin/accounts/:accountId/adjust', requireAdminAuth, async (req: AuthRequest, res) => {
+    try {
+      const mode: 'credit' | 'debit' | 'set' =
+        req.body?.mode === 'set' || req.body?.mode === 'debit' || req.body?.mode === 'credit'
+          ? req.body.mode
+          : req.body?.direction === 'debit'
+            ? 'debit'
+            : 'credit';
+      const amount = Number(req.body?.amount);
+      const rawReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      const reason =
+        rawReason.length >= 2
+          ? rawReason.slice(0, 140)
+          : mode === 'set'
+            ? 'QUIKUP Balance Adjustment'
+            : mode === 'debit'
+              ? 'QUIKUP Account Debit'
+              : 'QUIKUP Treasury Credit';
+      const category: TransactionCategory | undefined = VALID_CATEGORIES.includes(
+        req.body?.category
+      )
+        ? req.body.category
+        : undefined;
+
+      const maxAmount = 1_000_000_000_000;
+      if (mode === 'set') {
+        if (!Number.isFinite(amount) || amount < 0 || amount > maxAmount) {
+          res.status(400).json({ error: 'Enter a valid balance between 0 and 1,000,000,000,000.' });
+          return;
+        }
+      } else if (!Number.isFinite(amount) || amount <= 0 || amount > maxAmount) {
+        res
+          .status(400)
+          .json({ error: 'Enter a valid amount between 0.01 and 1,000,000,000,000.' });
+        return;
+      }
+
+      const adminActor = req.user?.email || req.user?.name || 'Admin Operations';
+      const result = await adminAdjustAccountBalance({
+        adminActor,
+        accountId: req.params.accountId,
+        mode,
+        amount,
+        reason,
+        category,
+      });
+
+      if (result.errorStatus) {
+        res.status(result.errorStatus).json({ error: result.errorMessage });
+        return;
+      }
+
+      res.status(201).json({
+        account: result.account,
+        transaction: result.transaction,
+      });
+    } catch {
+      res.status(500).json({ error: 'Unable to adjust account balance.' });
+    }
+  });
+
+  app.patch('/api/admin/accounts/:accountId', requireAdminAuth, async (req: AuthRequest, res) => {
+    try {
+      if (typeof req.body?.frozen !== 'boolean') {
+        res.status(400).json({ error: 'Specify frozen status as true or false.' });
+        return;
+      }
+
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : undefined;
+      const adminActor = req.user?.email || req.user?.name || 'Admin Operations';
+      const result = await adminSetAccountFrozen({
+        adminActor,
+        accountId: req.params.accountId,
+        frozen: req.body.frozen,
+        reason,
+      });
+
+      if (result.errorStatus) {
+        res.status(result.errorStatus).json({ error: result.errorMessage });
+        return;
+      }
+
+      res.json({ account: result.account });
+    } catch {
+      res.status(500).json({ error: 'Unable to update account status.' });
+    }
+  });
+
+  app.post('/api/admin/fraud-alerts/:id/resolve', requireAdminAuth, async (req: AuthRequest, res) => {
+    try {
+      const decision = req.body?.decision === 'approve' ? 'approve' : 'block';
+      const adminActor = req.user?.email || req.user?.name || 'Admin Operations';
+      const result = await adminResolveFraudAlert({
+        adminActor,
+        alertId: req.params.id,
+        decision,
+      });
+
+      if (!result) {
+        res.status(404).json({ error: 'Fraud alert not found.' });
+        return;
+      }
+
+      res.json(result);
+    } catch {
+      res.status(500).json({ error: 'Unable to resolve fraud alert.' });
     }
   });
 

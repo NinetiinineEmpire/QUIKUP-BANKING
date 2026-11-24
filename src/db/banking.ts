@@ -3,6 +3,8 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   accounts,
+  adminAuditLogs,
+  adminCredentials,
   budgets,
   cards,
   fraudAlerts,
@@ -14,6 +16,13 @@ import {
 } from './schema.ts';
 import type {
   AccountType,
+  AdminAuditLogItem,
+  AdminCardItem,
+  AdminFraudAlertItem,
+  AdminOverviewPayload,
+  AdminReminderItem,
+  AdminTransactionItem,
+  AdminUserSummary,
   BankAccount,
   BankCard,
   BankingBootstrapPayload,
@@ -34,6 +43,16 @@ import type {
   TransactionType,
   UserProfile,
 } from '../types/banking.ts';
+
+export const INITIAL_ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL || 'lakheelklaleel999@gmail.com'
+)
+  .trim()
+  .toLowerCase();
+
+export function isInitialAdminEmail(email?: string | null): boolean {
+  return Boolean(email && email.trim().toLowerCase() === INITIAL_ADMIN_EMAIL);
+}
 
 export const FX_RATES: FxRateMap = {
   USD: 1,
@@ -88,6 +107,7 @@ export function mapUser(row: UserRow): UserProfile {
     id: row.uid,
     fullName: row.fullName,
     email: row.email,
+    role: row.role === 'admin' ? 'admin' : 'customer',
     preferredCurrency: (VALID_CURRENCIES.includes(row.preferredCurrency as CurrencyCode)
       ? row.preferredCurrency
       : 'USD') as CurrencyCode,
@@ -284,7 +304,8 @@ function createDefaultBeneficiaries(): SavedBeneficiary[] {
 export async function getOrCreateUserAndPortfolio(
   uid: string,
   email: string,
-  displayName?: string
+  displayName?: string,
+  isEmailVerified = false
 ): Promise<UserRow> {
   try {
     const cleanEmail = (email || `${uid}@quikup.client`).trim().toLowerCase();
@@ -292,6 +313,7 @@ export async function getOrCreateUserAndPortfolio(
       displayName && displayName.trim().length >= 2
         ? displayName.trim().slice(0, 80)
         : cleanEmail.split('@')[0] || 'QUIKUP Client';
+    const shouldPromoteInitialAdmin = isEmailVerified && isInitialAdminEmail(cleanEmail);
 
     const [userRow] = await db
       .insert(users)
@@ -299,6 +321,7 @@ export async function getOrCreateUserAndPortfolio(
         uid,
         email: cleanEmail,
         fullName: cleanName,
+        role: shouldPromoteInitialAdmin ? 'admin' : 'customer',
         preferredCurrency: 'USD',
         tier: 'Countree Private',
         security: createDefaultSecurity(),
@@ -310,6 +333,7 @@ export async function getOrCreateUserAndPortfolio(
         set: {
           email: cleanEmail,
           fullName: cleanName,
+          ...(shouldPromoteInitialAdmin ? { role: 'admin' } : {}),
         },
       })
       .returning();
@@ -1063,10 +1087,11 @@ async function seedStarterPortfolioOnTx(
 export async function getBankingBootstrap(
   uid: string,
   email: string,
-  displayName?: string
+  displayName?: string,
+  isEmailVerified = false
 ): Promise<BankingBootstrapPayload> {
   try {
-    const userRow = await getOrCreateUserAndPortfolio(uid, email, displayName);
+    const userRow = await getOrCreateUserAndPortfolio(uid, email, displayName, isEmailVerified);
     const [
       accRows,
       txRows,
@@ -2226,6 +2251,498 @@ export async function rotateE2eeKeys(
     return mapUser(updatedUser);
   } catch (error) {
     console.error('Database operation failed in rotateE2eeKeys:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function getAdminClaimStatus(): Promise<{ claimed: boolean; envManaged: boolean }> {
+  try {
+    const envManaged = Boolean(process.env.ADMIN_PASSCODE && process.env.ADMIN_PASSCODE.trim().length > 0);
+    const [row] = await db
+      .select({ id: adminCredentials.id })
+      .from(adminCredentials)
+      .where(eq(adminCredentials.id, 'primary'))
+      .limit(1);
+    return { claimed: Boolean(row), envManaged };
+  } catch (error) {
+    console.error('Database operation failed in getAdminClaimStatus:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function claimAdminPassword(
+  passwordSalt: string,
+  passwordHash: string
+): Promise<{ ok?: boolean; errorStatus?: number; errorMessage?: string }> {
+  try {
+    if (process.env.ADMIN_PASSCODE && process.env.ADMIN_PASSCODE.trim().length > 0) {
+      return {
+        errorStatus: 409,
+        errorMessage: 'Admin passcode is already managed via environment configuration.',
+      };
+    }
+
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ id: adminCredentials.id })
+        .from(adminCredentials)
+        .where(eq(adminCredentials.id, 'primary'))
+        .limit(1);
+
+      if (existing) {
+        return {
+          errorStatus: 409,
+          errorMessage: 'Admin console password has already been claimed. Please log in.',
+        };
+      }
+
+      await tx.insert(adminCredentials).values({
+        id: 'primary',
+        passwordSalt,
+        passwordHash,
+      });
+
+      return { ok: true };
+    });
+  } catch (error) {
+    console.error('Database operation failed in claimAdminPassword:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function getAdminCredentialRecord(): Promise<{
+  passwordSalt: string;
+  passwordHash: string;
+} | null> {
+  try {
+    const [row] = await db
+      .select({
+        passwordSalt: adminCredentials.passwordSalt,
+        passwordHash: adminCredentials.passwordHash,
+      })
+      .from(adminCredentials)
+      .where(eq(adminCredentials.id, 'primary'))
+      .limit(1);
+    return row ?? null;
+  } catch (error) {
+    console.error('Database operation failed in getAdminCredentialRecord:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function getAdminOverview(): Promise<AdminOverviewPayload> {
+  try {
+    const [userRows, accountRows, txRows, alertRows, cardRows, reminderRows, auditRows] =
+      await Promise.all([
+        db.select().from(users).orderBy(desc(users.createdAt)),
+        db.select().from(accounts),
+        db.select().from(transactions).orderBy(desc(transactions.createdAt)),
+        db.select().from(fraudAlerts).orderBy(desc(fraudAlerts.createdAt)),
+        db.select().from(cards),
+        db.select().from(reminders),
+        db.select().from(adminAuditLogs).orderBy(desc(adminAuditLogs.createdAt)),
+      ]);
+
+    const userMap = new Map(userRows.map((u) => [u.uid, u]));
+    const accountMap = new Map(accountRows.map((a) => [a.id, a]));
+
+    const accountsByUser = new Map<string, BankAccount[]>();
+    for (const acc of accountRows) {
+      const mapped = mapAccount(acc);
+      const list = accountsByUser.get(acc.userUid) || [];
+      list.push(mapped);
+      accountsByUser.set(acc.userUid, list);
+    }
+
+    const txCountByUser = new Map<string, number>();
+    const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+    let volume24hUsd = 0;
+
+    for (const tx of txRows) {
+      txCountByUser.set(tx.userUid, (txCountByUser.get(tx.userUid) || 0) + 1);
+      if (tx.createdAt.getTime() >= cutoff24h) {
+        volume24hUsd += toUsd(Math.abs(tx.amount), tx.currency as CurrencyCode);
+      }
+    }
+
+    const openAlertsByUser = new Map<string, number>();
+    let openFraudAlerts = 0;
+    for (const al of alertRows) {
+      if (al.status === 'open') {
+        openFraudAlerts += 1;
+        openAlertsByUser.set(al.userUid, (openAlertsByUser.get(al.userUid) || 0) + 1);
+      }
+    }
+
+    const cardsByUser = new Map<string, number>();
+    let activeCards = 0;
+    for (const c of cardRows) {
+      cardsByUser.set(c.userUid, (cardsByUser.get(c.userUid) || 0) + 1);
+      if (!c.frozen) activeCards += 1;
+    }
+
+    let totalCustodyUsd = 0;
+    let frozenAccounts = 0;
+    for (const acc of accountRows) {
+      totalCustodyUsd += toUsd(acc.balance, acc.currency as CurrencyCode);
+      if (acc.frozen) frozenAccounts += 1;
+    }
+
+    const userSummaries: AdminUserSummary[] = userRows
+      .filter((u) => u.role !== 'admin' || (accountsByUser.get(u.uid)?.length || 0) > 0)
+      .map((u) => {
+        const uAccounts = accountsByUser.get(u.uid) || [];
+        const totalBalanceUsd = uAccounts.reduce(
+          (sum, acc) => sum + toUsd(acc.balance, acc.currency),
+          0
+        );
+        return {
+          id: u.uid,
+          fullName: u.fullName,
+          email: u.email,
+          role: u.role === 'admin' ? 'admin' : 'customer',
+          preferredCurrency: (VALID_CURRENCIES.includes(u.preferredCurrency as CurrencyCode)
+            ? u.preferredCurrency
+            : 'USD') as CurrencyCode,
+          tier: u.tier,
+          createdAt: u.createdAt.toISOString(),
+          totalBalanceUsd: Math.round(totalBalanceUsd * 100) / 100,
+          accounts: uAccounts,
+          transactionCount: txCountByUser.get(u.uid) || 0,
+          openFraudAlertsCount: openAlertsByUser.get(u.uid) || 0,
+          cardsCount: cardsByUser.get(u.uid) || 0,
+        };
+      });
+
+    const mappedTransactions: AdminTransactionItem[] = txRows.map((t) => {
+      const owner = userMap.get(t.userUid);
+      const acc = accountMap.get(t.accountId);
+      return {
+        ...mapTransaction(t),
+        userFullName: owner?.fullName || 'Unknown User',
+        userEmail: owner?.email || '',
+        accountName: acc?.name || 'Account',
+      };
+    });
+
+    const mappedAlerts: AdminFraudAlertItem[] = alertRows.map((a) => {
+      const owner = userMap.get(a.userUid);
+      return {
+        ...mapFraudAlert(a),
+        userFullName: owner?.fullName || 'Unknown User',
+        userEmail: owner?.email || '',
+      };
+    });
+
+    const mappedCards: AdminCardItem[] = cardRows.map((c) => {
+      const owner = userMap.get(c.userUid);
+      return {
+        ...mapCard(c),
+        userFullName: owner?.fullName || 'Unknown User',
+        userEmail: owner?.email || '',
+      };
+    });
+
+    const mappedReminders: AdminReminderItem[] = reminderRows.map((r) => {
+      const owner = userMap.get(r.userUid);
+      return {
+        ...mapReminder(r),
+        userFullName: owner?.fullName || 'Unknown User',
+        userEmail: owner?.email || '',
+      };
+    });
+
+    const mappedAuditLogs: AdminAuditLogItem[] = auditRows.map((log) => {
+      const targetUser = userMap.get(log.targetUserUid);
+      return {
+        id: log.id,
+        adminActor: log.adminActor,
+        action: log.action,
+        targetUserUid: log.targetUserUid,
+        targetUserFullName: targetUser?.fullName || 'Unknown User',
+        targetUserEmail: targetUser?.email || '',
+        targetAccountId: log.targetAccountId ?? undefined,
+        amount: log.amount ?? undefined,
+        currency: (log.currency as CurrencyCode | null) ?? undefined,
+        reason: log.reason,
+        createdAt: log.createdAt.toISOString(),
+      };
+    });
+
+    return {
+      metrics: {
+        totalCustomers: userSummaries.length,
+        totalAccounts: accountRows.length,
+        frozenAccounts,
+        totalCustodyUsd: Math.round(totalCustodyUsd * 100) / 100,
+        totalTransactions: txRows.length,
+        volume24hUsd: Math.round(volume24hUsd * 100) / 100,
+        openFraudAlerts,
+        activeCards,
+      },
+      users: userSummaries,
+      transactions: mappedTransactions,
+      fraudAlerts: mappedAlerts,
+      cards: mappedCards,
+      reminders: mappedReminders,
+      auditLogs: mappedAuditLogs,
+      fxRates: FX_RATES,
+    };
+  } catch (error) {
+    console.error('Database operation failed in getAdminOverview:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function adminAdjustAccountBalance(input: {
+  adminActor: string;
+  accountId: string;
+  direction?: 'credit' | 'debit';
+  mode?: 'credit' | 'debit' | 'set';
+  amount: number;
+  reason: string;
+  category?: TransactionCategory;
+}): Promise<{
+  errorStatus?: number;
+  errorMessage?: string;
+  account?: BankAccount;
+  transaction?: TransactionRecord;
+}> {
+  try {
+    const effectiveMode: 'credit' | 'debit' | 'set' =
+      input.mode === 'set' || input.mode === 'debit' || input.mode === 'credit'
+        ? input.mode
+        : input.direction === 'debit'
+          ? 'debit'
+          : 'credit';
+
+    return await db.transaction(async (tx) => {
+      const [acc] = await tx
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, input.accountId))
+        .limit(1);
+
+      if (!acc) {
+        return { errorStatus: 404, errorMessage: 'Target bank account not found.' };
+      }
+
+      const precision = acc.currency === 'JPY' ? 1 : 100;
+      const roundedAmount = Math.round(input.amount * precision) / precision;
+
+      if (effectiveMode === 'set') {
+        if (!Number.isFinite(roundedAmount) || roundedAmount < 0) {
+          return { errorStatus: 400, errorMessage: 'Target balance must be zero or greater.' };
+        }
+      } else if (!Number.isFinite(roundedAmount) || roundedAmount <= 0) {
+        return { errorStatus: 400, errorMessage: 'Adjustment amount must be greater than zero.' };
+      }
+
+      if (effectiveMode === 'debit' && acc.balance < roundedAmount) {
+        return {
+          errorStatus: 400,
+          errorMessage: `Insufficient balance (${acc.balance.toFixed(2)} ${acc.currency} available).`,
+        };
+      }
+
+      const delta =
+        effectiveMode === 'set'
+          ? Math.round((roundedAmount - acc.balance) * precision) / precision
+          : effectiveMode === 'credit'
+            ? roundedAmount
+            : -roundedAmount;
+
+      if (effectiveMode === 'set' && delta === 0) {
+        return {
+          errorStatus: 400,
+          errorMessage: 'New balance is already equal to the current balance.',
+        };
+      }
+
+      const nextBalance =
+        effectiveMode === 'set'
+          ? roundedAmount
+          : Math.round((acc.balance + delta) * precision) / precision;
+
+      const [updatedAccount] = await tx
+        .update(accounts)
+        .set({ balance: nextBalance })
+        .where(eq(accounts.id, acc.id))
+        .returning();
+
+      const txCategory: TransactionCategory =
+        input.category && VALID_CATEGORIES.includes(input.category)
+          ? input.category
+          : delta >= 0
+            ? 'Salary & Income'
+            : 'Transfers';
+
+      const cleanReason =
+        input.reason.trim().slice(0, 140) ||
+        (effectiveMode === 'set'
+          ? 'QUIKUP Balance Adjustment'
+          : delta >= 0
+            ? 'QUIKUP Treasury Credit'
+            : 'QUIKUP Account Debit');
+      const reference = `ADM-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+      const [createdTx] = await tx
+        .insert(transactions)
+        .values({
+          id: generateId('tx'),
+          userUid: acc.userUid,
+          accountId: acc.id,
+          type: delta >= 0 ? 'deposit' : 'transfer_out',
+          category: txCategory,
+          merchantOrRecipient: cleanReason,
+          recipientBankOrHandle: 'QUIKUP Operations Desk',
+          amount: delta,
+          currency: acc.currency,
+          status: 'completed',
+          reference,
+          location: 'QUIKUP Treasury Desk',
+          riskScore: 0,
+          plainMemo: cleanReason,
+        })
+        .returning();
+
+      const formatAmt = (val: number) =>
+        acc.currency === 'JPY'
+          ? Math.round(val).toLocaleString('en-US')
+          : val.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            });
+
+      const formattedDelta = formatAmt(Math.abs(delta));
+      const formattedNext = formatAmt(nextBalance);
+
+      await tx.insert(notifications).values({
+        id: generateId('ntf'),
+        userUid: acc.userUid,
+        kind: 'transaction',
+        title:
+          effectiveMode === 'set'
+            ? `Account Balance Updated (${formattedNext} ${acc.currency})`
+            : delta >= 0
+              ? `Account Credited (+${formattedDelta} ${acc.currency})`
+              : `Account Debited (-${formattedDelta} ${acc.currency})`,
+        message: `${acc.name}: ${cleanReason} (Ref ${reference})`,
+        read: false,
+      });
+
+      await tx.insert(adminAuditLogs).values({
+        id: generateId('aud'),
+        adminActor: input.adminActor,
+        action:
+          effectiveMode === 'set'
+            ? 'EDIT_BALANCE'
+            : delta >= 0
+              ? 'CREDIT_BALANCE'
+              : 'DEBIT_BALANCE',
+        targetUserUid: acc.userUid,
+        targetAccountId: acc.id,
+        amount: Math.abs(delta),
+        currency: acc.currency,
+        reason: `${cleanReason} (New balance: ${formattedNext} ${acc.currency})`,
+      });
+
+      return {
+        account: mapAccount(updatedAccount),
+        transaction: mapTransaction(createdTx),
+      };
+    });
+  } catch (error) {
+    console.error('Database operation failed in adminAdjustAccountBalance:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function adminSetAccountFrozen(input: {
+  adminActor: string;
+  accountId: string;
+  frozen: boolean;
+  reason?: string;
+}): Promise<{ account?: BankAccount; errorStatus?: number; errorMessage?: string }> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [acc] = await tx
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, input.accountId))
+        .limit(1);
+
+      if (!acc) {
+        return { errorStatus: 404, errorMessage: 'Account not found.' };
+      }
+
+      const [updated] = await tx
+        .update(accounts)
+        .set({ frozen: input.frozen })
+        .where(eq(accounts.id, acc.id))
+        .returning();
+
+      const reasonText =
+        input.reason?.trim().slice(0, 140) ||
+        (input.frozen ? 'Frozen by QUIKUP Operations' : 'Reactivated by QUIKUP Operations');
+
+      await tx.insert(notifications).values({
+        id: generateId('ntf'),
+        userUid: acc.userUid,
+        kind: 'security',
+        title: input.frozen ? `Account Frozen: ${acc.name}` : `Account Reactivated: ${acc.name}`,
+        message: reasonText,
+        read: false,
+      });
+
+      await tx.insert(adminAuditLogs).values({
+        id: generateId('aud'),
+        adminActor: input.adminActor,
+        action: input.frozen ? 'FREEZE_ACCOUNT' : 'UNFREEZE_ACCOUNT',
+        targetUserUid: acc.userUid,
+        targetAccountId: acc.id,
+        reason: reasonText,
+      });
+
+      return { account: mapAccount(updated) };
+    });
+  } catch (error) {
+    console.error('Database operation failed in adminSetAccountFrozen:', error);
+    throw new Error('Database operation failed.', { cause: error });
+  }
+}
+
+export async function adminResolveFraudAlert(input: {
+  adminActor: string;
+  alertId: string;
+  decision: 'approve' | 'block';
+}) {
+  try {
+    const [alertRow] = await db
+      .select()
+      .from(fraudAlerts)
+      .where(eq(fraudAlerts.id, input.alertId))
+      .limit(1);
+
+    if (!alertRow) return null;
+
+    const result = await resolveFraudAlert(alertRow.userUid, input.alertId, input.decision);
+    if (!result) return null;
+
+    await db.insert(adminAuditLogs).values({
+      id: generateId('aud'),
+      adminActor: input.adminActor,
+      action: input.decision === 'approve' ? 'APPROVE_FRAUD_ALERT' : 'BLOCK_FRAUD_ALERT',
+      targetUserUid: alertRow.userUid,
+      targetAccountId: alertRow.accountId,
+      amount: alertRow.amount,
+      currency: alertRow.currency,
+      reason: `${input.decision === 'approve' ? 'Approved' : 'Blocked'} alert for ${alertRow.merchant}`,
+    });
+
+    return result;
+  } catch (error) {
+    console.error('Database operation failed in adminResolveFraudAlert:', error);
     throw new Error('Database operation failed.', { cause: error });
   }
 }

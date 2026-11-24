@@ -23,6 +23,7 @@ export const users = pgTable('users', {
   fullName: text('full_name').notNull(),
   passwordSalt: text('password_salt'),
   passwordHash: text('password_hash'),
+  role: text('role').notNull().default('customer'),
   preferredCurrency: text('preferred_currency').notNull().default('USD'),
   tier: text('tier').notNull().default('Countree Private'),
   security: jsonb('security').$type<SecuritySettings>().notNull(),
@@ -166,6 +167,26 @@ export const notifications = pgTable('notifications', {
   title: text('title').notNull(),
   message: text('message').notNull(),
   read: boolean('read').notNull().default(false),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const adminCredentials = pgTable('admin_credentials', {
+  id: text('id').primaryKey(),
+  passwordSalt: text('password_salt').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const adminAuditLogs = pgTable('admin_audit_logs', {
+  id: text('id').primaryKey(),
+  adminActor: text('admin_actor').notNull(),
+  action: text('action').notNull(),
+  targetUserUid: text('target_user_uid').notNull(),
+  targetAccountId: text('target_account_id'),
+  amount: doublePrecision('amount'),
+  currency: text('currency'),
+  reason: text('reason').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
 

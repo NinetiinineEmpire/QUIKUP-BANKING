@@ -166,6 +166,7 @@ export interface UserProfile {
   id: string;
   fullName: string;
   email: string;
+  role?: 'customer' | 'admin';
   preferredCurrency: CurrencyCode;
   tier: 'Countree Private' | 'Countree Global';
   createdAt: string;
@@ -195,5 +196,75 @@ export interface BankingBootstrapPayload {
   reminders: PaymentReminder[];
   notifications: NotificationItem[];
   beneficiaries: SavedBeneficiary[];
+  fxRates: FxRateMap;
+}
+
+export interface AdminUserSummary {
+  id: string;
+  fullName: string;
+  email: string;
+  role: 'customer' | 'admin';
+  preferredCurrency: CurrencyCode;
+  tier: string;
+  createdAt: string;
+  totalBalanceUsd: number;
+  accounts: BankAccount[];
+  transactionCount: number;
+  openFraudAlertsCount: number;
+  cardsCount: number;
+}
+
+export interface AdminTransactionItem extends TransactionRecord {
+  userFullName: string;
+  userEmail: string;
+  accountName: string;
+}
+
+export interface AdminFraudAlertItem extends FraudAlert {
+  userFullName: string;
+  userEmail: string;
+}
+
+export interface AdminCardItem extends BankCard {
+  userFullName: string;
+  userEmail: string;
+}
+
+export interface AdminReminderItem extends PaymentReminder {
+  userFullName: string;
+  userEmail: string;
+}
+
+export interface AdminAuditLogItem {
+  id: string;
+  adminActor: string;
+  action: string;
+  targetUserUid: string;
+  targetUserFullName: string;
+  targetUserEmail: string;
+  targetAccountId?: string;
+  amount?: number;
+  currency?: CurrencyCode;
+  reason: string;
+  createdAt: string;
+}
+
+export interface AdminOverviewPayload {
+  metrics: {
+    totalCustomers: number;
+    totalAccounts: number;
+    frozenAccounts: number;
+    totalCustodyUsd: number;
+    totalTransactions: number;
+    volume24hUsd: number;
+    openFraudAlerts: number;
+    activeCards: number;
+  };
+  users: AdminUserSummary[];
+  transactions: AdminTransactionItem[];
+  fraudAlerts: AdminFraudAlertItem[];
+  cards: AdminCardItem[];
+  reminders: AdminReminderItem[];
+  auditLogs: AdminAuditLogItem[];
   fxRates: FxRateMap;
 }

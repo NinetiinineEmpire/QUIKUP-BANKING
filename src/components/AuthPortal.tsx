@@ -29,6 +29,11 @@ import {
   SUPPORTED_CURRENCIES,
 } from '../lib/currency.ts';
 import type { CurrencyCode, UserProfile } from '../types/banking.ts';
+import bankHeroLobbyImg from '../assets/images/bank_hero_lobby_1795541674934.jpg';
+import fxFinanceDeskImg from '../assets/images/fx_finance_desk_clean_1795541694673.jpg';
+import bankCardTerminalImg from '../assets/images/quikup_bank_card_1795541676674.jpg';
+import wealthAdvisorImg from '../assets/images/wealth_advisor_clean_1795541694749.jpg';
+import contactlessMobileImg from '../assets/images/contactless_mobile_pay_1795541716670.jpg';
 
 interface AuthPortalProps {
   darkMode: boolean;
@@ -38,6 +43,7 @@ interface AuthPortalProps {
     preferredCurrency?: CurrencyCode,
     provider?: 'firebase' | 'password'
   ) => Promise<void> | void;
+  onAdminAuthenticated: (adminToken: string) => void;
 }
 
 const ACCOUNT_TIERS = [
@@ -121,7 +127,12 @@ export function QuikupLogo({
   );
 }
 
-export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPortalProps) {
+export function AuthPortal({
+  darkMode,
+  onToggleDark,
+  onAuthenticated,
+  onAdminAuthenticated,
+}: AuthPortalProps) {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [mode, setMode] = useState<'login' | 'register'>('register');
   const [fullName, setFullName] = useState('');
@@ -197,6 +208,10 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             password,
           },
         });
+        if (res.user.role === 'admin') {
+          onAdminAuthenticated(res.token);
+          return;
+        }
         await onAuthenticated(res.token, undefined, 'password');
       }
     } catch (err) {
@@ -411,8 +426,8 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
               <div className="aspect-[4/3] w-full">
                 {!imgErrors.hero ? (
                   <img
-                    src="/src/assets/images/hero_bank_headquarters_1795466989602.jpg"
-                    alt="QUIKUP international glass and limestone headquarters"
+                    src={bankHeroLobbyImg}
+                    alt="Modern QUIKUP private banking lobby and financial advisory center"
                     referrerPolicy="no-referrer"
                     onError={() => setImgErrors((p) => ({ ...p, hero: true }))}
                     className="h-full w-full object-cover"
@@ -498,8 +513,8 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             <div className="aspect-[16/9] w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
               {!imgErrors.trade ? (
                 <img
-                  src="/src/assets/images/global_trade_finance_1795466990120.jpg"
-                  alt="International financial center skyline and harbor"
+                  src={fxFinanceDeskImg}
+                  alt="International banking trading desk displaying live foreign exchange currency charts"
                   referrerPolicy="no-referrer"
                   onError={() => setImgErrors((p) => ({ ...p, trade: true }))}
                   className="h-full w-full object-cover"
@@ -537,8 +552,8 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             <div className="aspect-[4/3] w-full overflow-hidden bg-slate-900">
               {!imgErrors.card ? (
                 <img
-                  src="/src/assets/images/countree_card_metal_1795466382355.jpg"
-                  alt="QUIKUP titanium metal banking card"
+                  src={bankCardTerminalImg}
+                  alt="Contactless navy EMV chip bank card beside a payment terminal"
                   referrerPolicy="no-referrer"
                   onError={() => setImgErrors((p) => ({ ...p, card: true }))}
                   className="h-full w-full object-cover"
@@ -578,8 +593,8 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             <div className="aspect-[4/3] w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
               {!imgErrors.advisory && (
                 <img
-                  src="/src/assets/images/wealth_advisory_meeting_1795466989899.jpg"
-                  alt="Wealth advisor and client reviewing financial goals and credit lines"
+                  src={wealthAdvisorImg}
+                  alt="Financial wealth advisor and client reviewing investment growth charts"
                   referrerPolicy="no-referrer"
                   onError={() => setImgErrors((p) => ({ ...p, advisory: true }))}
                   className="h-full w-full object-cover"
@@ -604,8 +619,8 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             <div className="aspect-[16/9] w-full overflow-hidden bg-slate-200 dark:bg-slate-800">
               {!imgErrors.mobile ? (
                 <img
-                  src="/src/assets/images/mobile_banking_security_1795466990333.jpg"
-                  alt="QUIKUP mobile dark-mode interface and metal card"
+                  src={contactlessMobileImg}
+                  alt="Customer completing secure contactless mobile banking payment at a terminal"
                   referrerPolicy="no-referrer"
                   onError={() => setImgErrors((p) => ({ ...p, mobile: true }))}
                   className="h-full w-full object-cover"
@@ -996,106 +1011,110 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
             </div>
 
             <form onSubmit={handlePasswordSubmit} className="mt-5 space-y-3.5">
-              {mode === 'register' && (
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    minLength={2}
-                    maxLength={80}
-                    autoComplete="name"
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="e.g. Jordan Taylor"
-                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                  />
-                </div>
-              )}
+                  {mode === 'register' && (
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                        Full Name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        maxLength={80}
+                        autoComplete="name"
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        placeholder="e.g. Jordan Taylor"
+                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                      />
+                    </div>
+                  )}
 
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  required
-                  maxLength={120}
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                  Password
-                </label>
-                <div className="relative mt-1.5">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    minLength={mode === 'register' ? 8 : 1}
-                    maxLength={128}
-                    autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder={
-                      mode === 'register' ? 'At least 8 characters' : 'Enter your password'
-                    }
-                    className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pr-10 pl-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((v) => !v)}
-                    className="absolute inset-y-0 right-2 flex items-center px-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {mode === 'register' && (
-                <>
                   <div>
                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
-                      Primary Reporting Currency
+                      Email Address
                     </label>
-                    <select
-                      value={preferredCurrency}
-                      onChange={(e) => setPreferredCurrency(e.target.value as CurrencyCode)}
-                      className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                    >
-                      {SUPPORTED_CURRENCIES.map((c) => (
-                        <option key={c.code} value={c.code}>
-                          {c.code} — {c.name}
-                        </option>
-                      ))}
-                    </select>
+                    <input
+                      type="email"
+                      required
+                      maxLength={120}
+                      autoComplete="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                    />
                   </div>
 
-                  <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={includeSamplePortfolio}
-                      onChange={(e) => setIncludeSamplePortfolio(e.target.checked)}
-                      className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-[#0B2545] focus:ring-blue-600"
-                    />
-                    <span>
-                      <strong className="block text-[#0B2545] dark:text-white">
-                        Pre-load multi-currency portfolio & analytics
-                      </strong>
-                      Start with USD, EUR, GBP, and JPY accounts, cards, and budgets (or uncheck for
-                      a fresh single-currency checking account).
-                    </span>
-                  </label>
-                </>
-              )}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                      Password
+                    </label>
+                    <div className="relative mt-1.5">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        required
+                        minLength={mode === 'register' ? 8 : 1}
+                        maxLength={128}
+                        autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder={
+                          mode === 'register' ? 'At least 8 characters' : 'Enter your password'
+                        }
+                        className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pr-10 pl-3.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="absolute inset-y-0 right-2 flex items-center px-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {mode === 'register' && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                          Primary Reporting Currency
+                        </label>
+                        <select
+                          value={preferredCurrency}
+                          onChange={(e) => setPreferredCurrency(e.target.value as CurrencyCode)}
+                          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                        >
+                          {SUPPORTED_CURRENCIES.map((c) => (
+                            <option key={c.code} value={c.code}>
+                              {c.code} — {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={includeSamplePortfolio}
+                          onChange={(e) => setIncludeSamplePortfolio(e.target.checked)}
+                          className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-[#0B2545] focus:ring-blue-600"
+                        />
+                        <span>
+                          <strong className="block text-[#0B2545] dark:text-white">
+                            Pre-load multi-currency portfolio & analytics
+                          </strong>
+                          Start with USD, EUR, GBP, and JPY accounts, cards, and budgets (or uncheck
+                          for a fresh single-currency checking account).
+                        </span>
+                      </label>
+                    </>
+                  )}
 
               {error && (
                 <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
@@ -1112,7 +1131,7 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
                   {submitting
                     ? mode === 'register'
                       ? 'Creating Account...'
-                      : 'Signing In...'
+                      : 'Authenticating...'
                     : mode === 'register'
                       ? 'Create Account'
                       : 'Log In to QUIKUP'}
@@ -1139,9 +1158,7 @@ export function AuthPortal({ darkMode, onToggleDark, onAuthenticated }: AuthPort
                   d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.8-5.5 3.8-3.3 0-6-2.7-6-6s2.7-6 6-6c1.9 0 3.1.8 3.9 1.5l2.7-2.6C16.9 3.2 14.7 2.3 12 2.3 6.6 2.3 2.3 6.6 2.3 12s4.3 9.7 9.7 9.7c5.6 0 9.3-3.9 9.3-9.5 0-.6-.1-1.1-.2-1.6H12z"
                 />
               </svg>
-              <span>
-                {mode === 'register' ? 'Continue with Google' : 'Sign In with Google'}
-              </span>
+              <span>{mode === 'register' ? 'Continue with Google' : 'Sign In with Google'}</span>
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-2 border-t border-slate-100 pt-4 text-[11px] text-slate-500 dark:border-slate-800 dark:text-slate-400">
